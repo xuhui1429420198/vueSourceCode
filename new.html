@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>测试</title>
+  </head>
+
+  <body>
+    <div id="app">
+      <div>{{ name }}</div>
+      <input type="text" v-model="name">
+      <div v-text="name"></div>
+      <div v-html="name"></div>
+      <div></div>
+    </div>
+  </body>
+
+  <script>
+    class Vue{
+      constructor(options){
+        this.$el = document.querySelector(options.el)
+        this.$data = options.data
+        this.dep = new Dep()
+        this.arrMethods = Array.prototype
+        this.methodsToPatch = [
+          'push',
+          'pop',
+          'shift',
+          'unshift',
+          'splice',
+          'sort',
+          'reverse'
+        ]
+        this.insertMethod = ['push', 'unshift', 'splice']
+
+        this.proxy(this, options.data)
+
+        this.observe(options.data)
+        this.def(this.$data.arr)
+
+        this.compile(this.$el)
+      }
+
+      // 数据代理
+      proxy(target, obj){
+        const keys = Object.keys(obj)
+        for(let key of keys){
+          Object.defineProperty(target, key, {
+            get() {
+              return obj[key]
+            },
+            set(value){
+              // tong  zhi dep gai gengxin shitu 
+              obj[key] = value
+            }
+          })
+        }
+      }
+
+      // 事件代理
+      // observe(obj){
+      //   let keys = Object.keys(obj)
+      //   keys.forEach(key => {
+      //     let value = obj[key]
+      //     Object.defineProperty(obj, key, {
+      //       get:() => value,
+      //       set:val=>{
+      //         // 数据更新触发页面更新
+      //         console.log('数据更新')
+      //         value = val
+      //         if(this.dep.allDep[key]){
+      //           this.dep.allDep[key].forEach(watcher => {
+      //             watcher.update()
+      //           })
+      //         }
+      //         // 在这里 update
+      //       }
+      //     })
+      //     if(typeof value === 'object'){
+      //       this.observe(value)
+      //     }
+      //   })
+      // }
+
+      // 事件代理
+      observe(obj){
+        let keys = Object.keys(obj)
+        for(const key in obj){
+          let value = obj[key]
+          Object.defineProperty(obj, key, {
+            get:() => value,
+            set:val=>{
+              // 数据更新触发页面更新
+              console.log('数据更新')
+              value = val
+              if(this.dep.allDep[key]){
+                this.dep.allDep[key].forEach(watcher => {
+                  watcher.update()
+                })
+              }
+              // 在这里 update
+            }
+          })
+          if(typeof value === 'object'){
+            this.observe(value)
+          }
+        }
+      }
+
+      def(arr){
+        for(let method of this.methodsToPatch){
+          Object.defineProperty(arr, method, {
+            value:(...arg) => {
+              const result = this.arrMethods[method].call(arr, ...arg)
+              console.log('数组方法劫持')
+              if(method in this.insertMethod){
+                this.observe(arr)
+              }
+              return result
+            },
+          })
+        }
+
+      }
+
+      
+
+      // 渲染
+      compile(root){
+        const children = root.childNodes
+
+        for(let child of children){
+          if(child.nodeType === 3){
+            this.compileMark(child)
+            continue
+          }
+          // 在这里 new Watcher
+          if(child.hasAttribute('v-html')){
+            this.compileHtml(child)
+            continue 
+          }
+          if(child.hasAttribute('v-model')){
+            this.compileModel(child)
+            continue 
+          }
+          if(child.hasAttribute('v-text')){
+            this.compileText(child)
+            continue 
+          }
+          this.compile(child)
+        }
+      }
+
+      // 编译 v-html
+      compileHtml(child){
+        const path = child.getAttribute('v-html')
+        this.html(child, path)
+        const watcher = new Watcher(this, child, path, this.html)
+        this.dep.addSub(path, watcher)
+      }
+
+      // 编译 v-model
+      compileModel(child){
+        // 在这里添加事件 双向绑定
+        const path = child.getAttribute('v-model')
+        this.model(child, path)
+        const watcher = new Watcher(this, child, path, this.html)
+        this.dep.addSub(path, watcher)
+        child.addEventListener('input', e => {
+          this[path] = e.target.value
+        })
+      }
+
+      // 编译文本 v-text
+      compileText(child){
+        const path = child.getAttribute('v-text')
+        this.text(child, path)
+        const watcher = new Watcher(this, child, path, this.text)
+        this.dep.addSub(path, watcher)
+      }
+
+      compileMark(child){
+        const reg = /\{\{(.*?)\}\}/g
+        const res = child.textContent.match(reg)
+        if(!res) return
+        const textContent = child.textContent.replace(reg, (item, value)=>{
+          const path = value.trim()
+          return this[path]
+        })
+
+        // 偷个懒 文本拼接还是有点麻烦
+        child.textContent = textContent
+
+        res.forEach(item => {
+          let content = item.slice(2, -2).trim()
+          const watcher = new Watcher(this, child, content, this.mark)
+          this.dep.addSub(content, watcher)  
+        })
+      }
+
+
+      // 不同元素更新内容的方法
+      html(node, path){
+        node.innerHTML = this[path]
+      }
+
+      model(node, path){
+        node.value = this[path]
+      }
+
+      text(node, path){
+        node.textContent = this[path]
+      }
+
+      mark(node, path){
+        node.textContent = this[path]
+      }
+    }
+
+    // 用于触发页面更新
+    class Watcher{
+      constructor(vm, node, value, cb){
+        this.vm = vm
+        this.node = node
+        this.value = value
+        this.cb = cb
+      }
+
+      update(){
+        this.cb.call(this.vm, this.node, this.value)
+      }
+    }
+
+    // 用于依赖收集
+    class Dep{
+      constructor(){
+        this.allDep = {
+          msg: [this.text]
+        }
+      }
+
+      addSub(type, watcher){
+        (this.allDep[type] || (this.allDep[type] = [])).push(watcher)
+      }
+    }
+
+    const vm = new Vue({
+      el: "#app",
+      data:{
+        msg: '哈哈',
+        name: 'ppp',
+        arr: [1,2,3],
+        obj:{
+          age: 100
+        }
+      }
+    })
+  </script>
+</html>
